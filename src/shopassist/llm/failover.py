@@ -1,0 +1,1 @@
+"""Story 0.5. Classes: FailoverStreamer (runs attempts through StreamGuard, picks next model, emits failover events, tracks chunks already sent) and ContinuationBuilder (partial text -> next request; text only, raises on partial tool call until story 3.4)."""

@@ -1,0 +1,31 @@
+# Tier names come from table keys. Secrets never go in this file:
+# provider keys come from <PROVIDER>_API_KEY in .env.
+# 3 times: One for the individual, One for the entire fallback pass, One for the Outer time
+[models.gemini.fast]
+spec.litellm_params.model = "gemini/gemini-3.5-flash-lite"
+spec.litellm_params.timeout = 30
+spec.litellm_params.stream_timeout = 10
+pricing = { input_usd = "0.30", output_usd = "2.50" }
+
+[models.gemini.smart]
+spec.litellm_params.model = "gemini/gemini-3.8-flash"
+spec.litellm_params.timeout = 60
+spec.litellm_params.stream_timeout = 3
+pricing = { input_usd = "0.75", output_usd = "3.75" }
+
+#[models.gemini.thinking]
+#spec.litellm_params.model = "gemini/gemini-3.8-flash"
+#spec.litellm_params.timeout = 60
+#spec.litellm_params.stream_timeout = 3
+#pricing = { input_usd = "0.75", output_usd = "3.75" }
+
+[models.gemini.flaky]
+spec.litellm_params.model = "gemini/gemini-3.5-flash-lite"
+spec.litellm_params.api_key = "broken"   # deliberately invalid, to exercise fallback
+pricing = { input_usd = "0.30", output_usd = "2.50" }
+
+[fallbacks.gemini]
+smart = ["fast"]
+
+[options.gemini]
+num_retries = 0
