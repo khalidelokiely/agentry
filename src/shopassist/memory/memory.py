@@ -91,6 +91,14 @@ class Memory:
         self._version += 1
         return True
 
+    def rollback(self, message_id: str) -> bool:
+        for i in range(len(self._messages)-1, -1, -1):
+            if self._messages[i].id == message_id:
+                self._messages.pop(i)
+                self._version += 1
+                return True
+        return False
+
     def _archive(self, messages: Sequence[Message]) -> None:
         pass
 
