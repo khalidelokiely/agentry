@@ -1,27 +1,40 @@
 """Story 0.1. Class: LLMClient. The ONLY caller of router.acompletion.
 complete(purpose, ...) for summarizer, stream(purpose, ...) for chat. Writes a CallRecord for every call."""
+
 import asyncio
 import logging
 import time
 from contextlib import aclosing
 from dataclasses import dataclass, field, replace
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import Any, AsyncGenerator
 from uuid import uuid7
 
 import litellm
-from litellm import Router, token_counter, AuthenticationError, BadRequestError, APIError
+from litellm import (
+    APIError,
+    AuthenticationError,
+    BadRequestError,
+    Router,
+    token_counter,
+)
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.types.utils import ModelResponse
 
 from shopassist.llm.context import CallContext
 from shopassist.llm.cost import CostConfig
-from shopassist.llm.errors import FirstChunkTimeout, StreamStalled, AttemptFailure, ConnectTimeout, CompletionTimeout
-from shopassist.llm.events import TextDelta, Completion, LLMEvent
+from shopassist.llm.errors import (
+    AttemptFailure,
+    CompletionTimeout,
+    ConnectTimeout,
+    FirstChunkTimeout,
+    StreamStalled,
+)
+from shopassist.llm.events import Completion, LLMEvent, TextDelta
 from shopassist.llm.models import Tier, Timeouts
 from shopassist.llm.pricing import PricingTable, UnknownModelError
 from shopassist.llm.stream_guard import StreamGuard
-from shopassist.llm.usage import Outcome, FailureKind, UsageLedger, CallRecord
+from shopassist.llm.usage import CallRecord, FailureKind, Outcome, UsageLedger
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +45,7 @@ _REJECTED = _OVERLOADED + (litellm.InternalServerError, litellm.AuthenticationEr
 @dataclass
 class _Attempt:
     """Mutable scratchpad for ONE attempt. Turned into an immutable CallRecord at the end."""
+
     started_at: datetime
     t0: float
     parts: list[str] = field(default_factory=list)
@@ -51,7 +65,10 @@ class _Attempt:
 def _classify(a: _Attempt, exc: Exception) -> None:
     a.cause = exc
     if isinstance(exc, FirstChunkTimeout):
-        a.outcome, a.failure_kind = Outcome.FIRST_CHUNK_TIMEOUT, FailureKind.FIRST_CHUNK_TIMEOUT
+        a.outcome, a.failure_kind = (
+            Outcome.FIRST_CHUNK_TIMEOUT,
+            FailureKind.FIRST_CHUNK_TIMEOUT,
+        )
     elif isinstance(exc, CompletionTimeout):
         a.outcome, a.failure_kind = Outcome.TIMEOUT, FailureKind.TIMEOUT
     elif isinstance(exc, StreamStalled):
@@ -60,19 +77,21 @@ def _classify(a: _Attempt, exc: Exception) -> None:
         a.outcome, a.failure_kind = Outcome.ERROR, FailureKind.OVERLOADED
     elif isinstance(exc, ConnectTimeout):
         a.outcome, a.failure_kind = Outcome.CONNECT_TIMEOUT, FailureKind.CONNECT_TIMEOUT
-    elif isinstance(exc, AuthenticationError):
-        a.outcome, a.failure_kind = Outcome.AUTHENTICATION_ERROR, FailureKind.AUTHENTICATION_ERROR
-    elif (isinstance(exc, (BadRequestError, APIError, VertexAIError))
-          and (msg := str(exc).lower())
-          and any(ind in msg
-                  for ind in (
-                          "api key not valid",
-                          "api_key_invalid",
-                          "invalid api key",
-                          "incorrect api key",
-                          "invalid x-api-key",
-                          "authentication_error",
-                  ))):
+    elif isinstance(exc, AuthenticationError) or (
+        isinstance(exc, (BadRequestError, APIError, VertexAIError))
+        and (msg := str(exc).lower())
+        and any(
+            ind in msg
+            for ind in (
+                "api key not valid",
+                "api_key_invalid",
+                "invalid api key",
+                "incorrect api key",
+                "invalid x-api-key",
+                "authentication_error",
+            )
+        )
+    ):
         a.outcome, a.failure_kind = (
             Outcome.AUTHENTICATION_ERROR,
             FailureKind.AUTHENTICATION_ERROR,
@@ -84,13 +103,13 @@ def _classify(a: _Attempt, exc: Exception) -> None:
 
 class LLMClient:
     def __init__(
-            self,
-            cluster: str,
-            router: Router,
-            ledger: UsageLedger,
-            pricing: PricingTable,
-            timeouts: dict[Tier, Timeouts],
-            guard: StreamGuard | None = None,
+        self,
+        cluster: str,
+        router: Router,
+        ledger: UsageLedger,
+        pricing: PricingTable,
+        timeouts: dict[Tier, Timeouts],
+        guard: StreamGuard | None = None,
     ):
         self._cluster = cluster
         self._router = router
@@ -100,8 +119,8 @@ class LLMClient:
         self._guard = StreamGuard() if guard is None else guard
 
     async def stream(
-            self, ctx: CallContext, tier: Tier, messages: list[dict[str, Any]], **opts: Any
-    ) -> AsyncGenerator[LLMEvent, None]:
+        self, ctx: CallContext, tier: Tier, messages: list[dict[str, Any]], **opts: Any
+    ) -> AsyncGenerator[LLMEvent]:
 
         ctx = self._with_turn(ctx)
         a = _Attempt(started_at=datetime.now(UTC), t0=time.perf_counter())
@@ -111,15 +130,22 @@ class LLMClient:
             try:
                 async with asyncio.timeout(limits.stream_open_s) as cm:
                     source = await self._router.acompletion(
-                        model=tier.value, messages=messages, stream=True,
-                        stream_options={"include_usage": True}, **opts,
+                        model=tier.value,
+                        messages=messages,
+                        stream=True,
+                        stream_options={"include_usage": True},
+                        **opts,
                     )
                     a.reached_provider = True
             except litellm.Timeout as exc:
-                raise FirstChunkTimeout("router timed out waiting for first chunk") from exc
+                raise FirstChunkTimeout(
+                    "router timed out waiting for first chunk"
+                ) from exc
             except TimeoutError as exc:
                 if cm.expired():
-                    raise ConnectTimeout(f"no response from router in {limits.stream_open_s:.1f}s") from exc
+                    raise ConnectTimeout(
+                        f"no response from router in {limits.stream_open_s:.1f}s"
+                    ) from exc
                 raise
 
             async with aclosing(self._guard.wrap(source, limits.stall_s)) as chunks:
@@ -150,7 +176,9 @@ class LLMClient:
 
         yield Completion(text="".join(a.parts), record=record)
 
-    async def complete(self, ctx: CallContext, tier: Tier, messages: list[dict[str, Any]], **opts: Any) -> Completion:
+    async def complete(
+        self, ctx: CallContext, tier: Tier, messages: list[dict[str, Any]], **opts: Any
+    ) -> Completion:
         ctx = self._with_turn(ctx)
         a = _Attempt(started_at=datetime.now(UTC), t0=time.perf_counter())
 
@@ -164,10 +192,14 @@ class LLMClient:
                     )
                     a.reached_provider = True
             except litellm.Timeout as exc:
-                raise CompletionTimeout("router timed out waiting for completion") from exc
+                raise CompletionTimeout(
+                    "router timed out waiting for completion"
+                ) from exc
             except TimeoutError as exc:
                 if cm.expired():
-                    raise CompletionTimeout("router completion request timed out") from exc
+                    raise CompletionTimeout(
+                        "router completion request timed out"
+                    ) from exc
                 raise
 
             a.chunks += 1
@@ -202,7 +234,9 @@ class LLMClient:
             tool_call_seen=a.tool_call_seen,
         )
 
-    def _close(self, a: _Attempt, ctx: CallContext, tier: Tier, messages: list[dict[str, Any]]) -> CallRecord:
+    def _close(
+        self, a: _Attempt, ctx: CallContext, tier: Tier, messages: list[dict[str, Any]]
+    ) -> CallRecord:
         assert ctx.turn_id is not None
         prompt, completion, estimated = self._tokens(a, tier, messages)
         rec = CallRecord(
@@ -238,7 +272,9 @@ class LLMClient:
 
         if a.usage is not None:
             # Safely navigate usage dictionary or object properties
-            p_tok = getattr(a.usage, "prompt_tokens", None) or getattr(getattr(a.usage, "prompt", None), "tokens", 0)
+            p_tok = getattr(a.usage, "prompt_tokens", None) or getattr(
+                getattr(a.usage, "prompt", None), "tokens", 0
+            )
             c_tok = getattr(a.usage, "completion_tokens", None) or getattr(
                 getattr(a.usage, "completion", None), "tokens", 0
             )

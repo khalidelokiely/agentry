@@ -3,22 +3,22 @@ name = "shopassist"
 version = "0.1.0"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-  "litellm>=1.108.3",
-  "fastapi>=0.162.2",
-  "uvicorn[standard]>=0.54.0",
-  "pydantic>=2.14.3",
-  "pydantic-settings>=2.16.2",
-  "httpx>=0.28.1",
-  "InquirerPy>=0.3.4",
-  "ipykernel>=7.4.0",
+    "litellm>=1.108.3",
+    "fastapi>=0.162.2",
+    "uvicorn[standard]>=0.54.0",
+    "pydantic>=2.14.3",
+    "pydantic-settings>=2.16.2",
+    "httpx>=0.28.1",
+    "InquirerPy>=0.3.4",
+    "ipykernel>=7.4.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=9.2.0",
-  "pytest-asyncio>=1.4.1.post1",
-  "ruff>=0.17.4",
-  "rich>=15.0.0",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+    "ruff>=0.17.4",
+    "rich>=15.0.0",
 ]
 
 [build-system]
@@ -32,3 +32,5 @@ packages = ["src/shopassist"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+asyncio_default_fixture_loop_scope = "function"
+

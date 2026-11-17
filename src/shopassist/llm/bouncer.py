@@ -5,7 +5,7 @@ from uuid import uuid7
 
 from shopassist.llm.context import CallContext
 from shopassist.llm.events import Completion
-from shopassist.llm.gateway import LLMGateway, LLMEvent
+from shopassist.llm.gateway import LLMEvent, LLMGateway
 from shopassist.llm.models import Tier
 
 
@@ -26,8 +26,9 @@ class Bouncer:
     def _start_turn(ctx: CallContext) -> CallContext:
         return replace(ctx, turn_id=ctx.turn_id or uuid7().hex, attempt_index=0)
 
-    async def stream(self, ctx: CallContext, tier: Tier, messages: list[dict], **opts: Any) -> AsyncGenerator[
-        LLMEvent, None]:
+    async def stream(
+        self, ctx: CallContext, tier: Tier, messages: list[dict[str, Any]], **opts: Any
+    ) -> AsyncGenerator[LLMEvent]:
         ctx = self._start_turn(ctx)
 
         response_stream = self._primary.stream(ctx, tier, messages, **opts)
@@ -36,6 +37,8 @@ class Bouncer:
             async for event in stream:
                 yield event
 
-    async def complete(self, ctx: CallContext, tier: Tier, messages: list[dict], **opts: Any) -> Completion:
+    async def complete(
+        self, ctx: CallContext, tier: Tier, messages: list[dict[str, Any]], **opts: Any
+    ) -> Completion:
         ctx = self._start_turn(ctx)
         return await self._primary.complete(ctx, tier, messages, **opts)
