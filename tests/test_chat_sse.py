@@ -8,6 +8,7 @@ from uuid import uuid7
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from litellm.llms.custom_httpx.http_handler import headers
 
 from shopassist.api.app import create_app
 from shopassist.llm.context import CallContext
@@ -54,4 +55,88 @@ async def make_client(delay_s: float = 0.01):
             yield client, app, ledger
 
 
-class FakeStreamingGateway: ...
+class FakeStreamingGateway:
+    def __init__(self, ledger: UsageLedger, delay_s: float = 0.01) -> None:
+        self._ledger = ledger
+        self._delay_s = delay_s
+
+    async def stream(
+        self, ctx: CallContext, tier: Tier, messages: list[dict[str, Any]], **opts: Any
+    ) -> AsyncGenerator[LLMEvent]:
+        outcome = Outcome.CANCELLED
+        chunks = 0
+
+        try:
+            user_texts = [m["content"] for m in messages if m["role"] == "user"]
+            reply = f"turns={len(user_texts)} last={user_texts[-1]}"
+
+            for word in reply.split(" "):
+                await asyncio.sleep(self._delay_s)
+                chunks += 1
+                yield TextDelta(text=word + " ")
+            outcome = Outcome.OK
+        finally:
+            rec = _make_record(ctx, tier, outcome, chunks)
+            self._ledger.record(rec)
+        yield Completion(text=reply, record=rec)
+
+
+@pytest.mark.asyncio
+async def test_multi_session_memory_isolation() -> None:
+    async with make_client(delay_s=0.01) as (client, app, ledger):
+        r1 = await client.post(
+            "/chat", headers={"X-Session-Id": "s1"}, json={"message": "alpha"}
+        )
+        r2 = await client.post(
+            "/chat", headers={"X-Session-Id": "s2"}, json={"message": "beta"}
+        )
+        r3 = await client.post(
+            "/chat", headers={"X-Session-Id": "s1"}, json={"message": "gamma"}
+        )
+        assert r1.status_code == 200 and "turns=1" in r1.text
+        assert r2.status_code == 200 and "turns=1" in r2.text
+        assert r3.status_code == 200 and "turns=2" in r3.text
+
+
+@pytest.mark.asyncio
+async def test_disconnect_rollback_and_concurrency_lock() -> None:
+    async with make_client(delay_s=0.15) as (client, app, ledger):
+        task = asyncio.create_task(
+            client.post(
+                "/chat",
+                headers={"X-Session-Id": "s1"},
+                json={"message": "hold one two"},
+            )
+        )
+        await asyncio.sleep(0.03)
+        conflict = await client.post(
+            "/chat", headers={"X-Session-Id": "s1"}, json={"message": "overlap"}
+        )
+        assert conflict.status_code == 409
+        parallel = await client.post(
+            "/chat", headers={"X-Session-Id": "s2"}, json={"message": "parallel"}
+        )
+        assert parallel.status_code == 200 and "turns=1" in parallel.text
+
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        s1_records = ledger.by_session("s1")
+        assert len(s1_records) == 1
+        assert s1_records[-1].outcome == Outcome.CANCELLED
+        assert s1_records[-1].cost_scaled > 0
+
+        s1_session = app.state.sessions.get_or_create("s1")
+        assert len(s1_session.memory.view()) == 0
+        assert not s1_session.lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_empty_payload_rejected_422() -> None:
+    async with make_client() as (client, app, ledger):
+        resp = await client.post(
+            "/chat", headers={"X-Session-Id": "s1"}, json={"message": ""}
+        )
+        assert resp.status_code == 422
+        assert len(ledger.records) == 0

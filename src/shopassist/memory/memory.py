@@ -1,4 +1,5 @@
 """Class: Memory. Holds system prompt, facts, summary, window."""
+
 import json
 from collections.abc import Sequence
 from typing import Any
@@ -48,16 +49,16 @@ class Memory:
             system_message = Message(
                 role="system",
                 content=SYSTEM_MEMORY.format(
-                    facts=json.dumps(self._facts),
-                    summary=json.dumps(self._summary)
-                )
+                    facts=json.dumps(self._facts), summary=json.dumps(self._summary)
+                ),
             )
 
         return [
             {"role": m.role, "content": m.content}
-            for m in
-            (
-                [system_message] + self._messages if system_message is not None else self._messages
+            for m in (
+                [system_message] + self._messages
+                if system_message is not None
+                else self._messages
             )
         ]
 
@@ -81,9 +82,7 @@ class Memory:
             return False
 
         self._facts = {
-            k: v
-            for k, v in (self._facts | result.facts).items()
-            if v is not None
+            k: v for k, v in (self._facts | result.facts).items() if v is not None
         }
         self._summary = result.summary
         self._messages = new_messages
@@ -91,6 +90,14 @@ class Memory:
 
         self._version += 1
         return True
+
+    def rollback(self, message_id: str) -> bool:
+        for i in range(len(self._messages) - 1, -1, -1):
+            if self._messages[i].id == message_id:
+                self._messages.pop(i)
+                self._version += 1
+                return True
+        return False
 
     def _archive(self, messages: Sequence[Message]) -> None:
         pass

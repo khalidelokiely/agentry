@@ -33,32 +33,48 @@ async def chat(
     ledger: LedgerDependency,
     session: SessionDependency,
 ) -> StreamingResponse:
+    if session.lock.locked():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"session {session.session_id} already has an active stream",
+        )
+    await session.lock.acquire()
+
     ctx = CallContext(purpose=Purpose.CHAT, session_id=session.session_id)
     user_msg = session.memory.append("user", req.message)
     messages = session.memory.get_messages()
 
     async def event_stream() -> AsyncGenerator[str]:
+        completed = False
         try:
-            async for ev in gateway.stream(ctx, req.tier, messages):
-                if isinstance(ev, TextDelta):
-                    yield format_sse("delta", DeltaEvent(text=ev.text))
-                elif isinstance(ev, Completion):
-                    session.memory.append("assistant", ev.text)
-                    yield format_sse(
-                        "done",
-                        DoneEvent(
-                            reply_length=len(ev.text),
-                            prompt_tokens=ev.record.prompt_tokens,
-                            completion_tokens=ev.record.completion_tokens,
-                            cost_scaled=ev.record.cost_scaled,
-                            served_model=ev.record.served_model,
-                        ),
-                    )
+            async with aclosing(gateway.stream(ctx, req.tier, messages)) as stream:
+                async for ev in stream:
+                    if isinstance(ev, TextDelta):
+                        yield format_sse("delta", DeltaEvent(text=ev.text))
+                    elif isinstance(ev, Completion):
+                        session.memory.append("assistant", ev.text)
+                        completed = True
+                        yield format_sse(
+                            "done",
+                            DoneEvent(
+                                reply_length=len(ev.text),
+                                prompt_tokens=ev.record.prompt_tokens,
+                                completion_tokens=ev.record.completion_tokens,
+                                cost_scaled=ev.record.cost_scaled,
+                                served_model=ev.record.served_model,
+                            ),
+                        )
         except AttemptFailure as exc:
             yield format_sse(
                 "error",
                 ErrorEvent(kind=exc.kind.value, chunks_received=exc.chunks_received),
             )
+        except CancelledError, GeneratorExit:
+            log.info("client disconnected mid-stream session=%s", session.session_id)
+        finally:
+            if not completed:
+                session.memory.rollback(user_msg.id)
+            session.lock.release()
 
     return StreamingResponse(
         event_stream(),
